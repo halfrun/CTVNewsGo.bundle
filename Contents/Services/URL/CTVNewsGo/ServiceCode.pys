@@ -1,0 +1,125 @@
+import string
+import urllib
+
+####################################################################################################
+def MetadataObjectForURL(url):
+	
+	Log.Info("Generate metadata for " + url)
+	
+	data = JSON.ObjectFromURL(url)
+	urlData = ParseQueryString(url)
+	
+	title = data["name"]
+	logo_key = data["logo_key"]
+	
+	description = urllib.unquote(urlData["desc"])
+	
+    # Construct a metadata item
+	return VideoClipObject(
+		title = title,
+		thumb=R(logo_key),
+		summary = description
+	)
+	
+####################################################################################################
+@deferred # tells plex not to call this until the link is clicked
+def MediaObjectsForURL(url):
+		
+	Log.Debug("Data URL: " + url)
+	
+	data = JSON.ObjectFromURL(url)
+			
+	client = Client.Platform
+	Log.Info("Playback Client: " + str(Client.Platform))
+	
+	# default playback method:
+	callback = PlayHLS
+	
+	# some clients need to use a different playback method
+	if client == "Android":
+		callback = PlayHLSIndirect
+		
+	#if client == "Roku":
+	#	callback = PlayHLSRoku
+				
+	if client == "iOS":
+		callback = PlayHLSIndirect
+		
+	
+	# build media object list
+	# Roku has a stupid bug in the latest firmware, which breaks support for single bitrate HLS playlists.  The workaround (hopefully temporary), is to set the bitrate to 0.
+	if client == "Roku":
+		feed = data["feeds"][0]
+		Log.Debug("Roku workaround, setting bitrate zero")
+		return [
+			MediaObject(
+				optimized_for_streaming=True,
+				parts = [PartObject(key=HTTPLiveStreamURL(Callback(callback, url=feed["url"])))],
+				bitrate = feed["bitrate"],
+				video_resolution = feed["resolution"]
+			)
+		]
+		
+	else:
+		Log.Debug("Creating MediaObjects")
+		mediaObjects = []
+		
+		for feed in data["feeds"]:
+			mediaObjects.append(MediaObject(
+				optimized_for_streaming=True,
+				parts = [PartObject(key=HTTPLiveStreamURL(Callback(callback, url=feed["url"])))],
+				bitrate = feed["bitrate"],
+				video_resolution = feed["resolution"]
+			))		
+			
+		return mediaObjects
+
+
+####################################################################################################
+	
+
+@indirect
+def PlayHLSIndirect(url):
+	Log.Debug("IndirectResponse: " + url)
+	return IndirectResponse(VideoClipObject, key = HTTPLiveStreamURL(url))
+		
+	
+def PlayHLS(url):
+	Log.Debug("PlayHLS: " + url)
+		
+	playlist = HTTP.Request(url, follow_redirects=False).content
+
+	index = string.rfind(url, ".com/")
+	playlist_base = url[0:index+5]
+	Log.Debug("base: " + playlist_base)
+
+	new_playlist = ""
+
+	
+	for line in playlist.splitlines():
+		if line.startswith('#') or line.startswith("http"):
+			# take it as is
+			Log.Debug("line: " + line)
+			new_playlist = new_playlist + line + "\n"
+		else:
+			line = playlist_base + line.replace("../", "")
+			Log.Debug("line: " + line)
+			new_playlist = new_playlist + line + "\n"
+
+	return new_playlist
+		
+def ParseQueryString(url):	
+	queryStart = url.find("?") + 1
+	query = url[queryStart:len(url)]
+	Log.Debug("Query string: " + query)
+	parts = query.split("&")	
+	data = {}
+	
+	for part in parts:
+		kvp = part.split("=")
+		key = kvp[0]
+		value = kvp[1]
+		data[key] = value
+
+	return data
+	
